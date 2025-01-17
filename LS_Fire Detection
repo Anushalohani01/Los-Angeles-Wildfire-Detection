@@ -1,0 +1,123 @@
+// Los Angeles California Wildfire Detection and Burn Severity Mapping using VIIRS and Landsat 9 Data in Google Earth Engine
+
+// 1. Define the Region of Interest (ROI) with polygon coordinates
+var wildfireAreaCoords = [
+  [-118.64594108957739, 35.27276772595633],
+  [-119.48090202707739, 34.28015322390754],
+  [-119.19525749582739, 34.06200080475642],
+  [-118.64594108957739, 33.94359972405682],
+  [-118.52509148020239, 33.74285311880631],
+  [-118.32733757395239, 33.60571033732704],
+  [-118.06366569895239, 33.57825554782606],
+  [-117.43744499582739, 33.082578904162425],
+  [-117.26166374582739, 32.55631725937157],
+  [-116.83856943447157, 31.60345578174863],
+  [-115.70697763759658, 31.809082070221955],
+  [-115.93769052822158, 33.19882550456144],
+  [-116.23432138759658, 34.213282388955996],
+  [-117.84798145013852, 34.942684241192495],
+  [-118.49617480951352, 35.23036194193541]
+];
+
+// 2. Convert coordinates to a geometry polygon object
+var roiPolygon = ee.Geometry.Polygon(wildfireAreaCoords);
+
+// 3. Center the map on the defined ROI
+Map.centerObject(roiPolygon, 9);
+Map.addLayer(roiPolygon, {}, 'Study Area')
+
+// 4. Load VIIRS data to detect active fire regions during the specified date range
+var viirsData = ee.ImageCollection("NASA/VIIRS/002/VNP09GA")
+  .select(['I1', 'I2'])
+  .filterDate('2025-01-07', '2025-01-14');
+  Map.addLayer(viirsData.toBands().clip(roiPolygon), {}, 'VIIRS Wildfire Detection', false);
+
+// 5. Load pre-wildfire imagery from Landsat 9
+var preFireImagery = ee.ImageCollection("LANDSAT/LC09/C02/T1_L2")
+  .select(['SR_.*'])
+  .filterDate('2024-01-01', '2024-12-31')
+  .filterBounds(roiPolygon);
+  
+  Map.addLayer(preFireImagery.mean().clip(roiPolygon), {bands: ['SR_B5', 'SR_B4', 'SR_B3']}, 'Pre-Fire RGB', false);
+
+// 6. Load post-wildfire imagery from Landsat 9
+var postFireImagery = ee.ImageCollection("LANDSAT/LC09/C02/T1_L2")
+  .select(['SR_.*'])
+  .filterDate('2024-12-01', '2025-01-14')
+  .filterBounds(roiPolygon);
+Map.addLayer(postFireImagery.mean().clip(roiPolygon), {bands: ['SR_B5', 'SR_B4', 'SR_B3']}, 'Post-Fire RGB', false);
+
+// 7. Compute NDVI before the wildfire
+var ndviBefore = preFireImagery.map(function(image) {
+  var ndvi = image.normalizedDifference(['SR_B5', 'SR_B4']).rename('NDVI_Before');
+  return ndvi;
+}).mean();
+
+// 8. Compute NDVI after the wildfire
+var ndviAfter = postFireImagery.map(function(image) {
+  var ndvi = image.normalizedDifference(['SR_B5', 'SR_B4']).rename('NDVI_After');
+  return ndvi;
+}).mean();
+
+Map.addLayer(ndviBefore.clip(roiPolygon), {}, 'NDVI Before', false);
+Map.addLayer(ndviAfter.clip(roiPolygon), {}, 'NDVI After', false);
+
+// 9. Calculate NDVI change due to wildfire
+var ndviDifference = ndviBefore.subtract(ndviAfter);
+Map.addLayer(ndviDifference.clip(roiPolygon), {}, 'NDVI Change', false);
+
+
+
+// 10. Mask out water bodies to avoid misinterpretation
+var waterMask = ee.ImageCollection("GOOGLE/DYNAMICWORLD/V1")
+  .select('label').mode().neq(0);
+
+var ndviChangeMasked = ndviDifference.updateMask(waterMask).rename('NDVI_Change_Masked');
+Map.addLayer(ndviChangeMasked.clip(roiPolygon), {}, 'NDVI Change (Masked)', false);
+
+// 11. Export the masked NDVI change image
+Export.image.toDrive({
+  image: ndviChangeMasked.clip(roiPolygon),
+  description: 'Wildfire_NDVI_Change',
+  scale: 100,
+  maxPixels: 1e13,
+  region: roiPolygon,
+  crs: 'EPSG:4326'
+});
+
+// 12. Compute burn severity using Normalized Burn Ratio (NBR)
+var nbrBefore = preFireImagery.map(function(image) {
+  return image.normalizedDifference(['SR_B5', 'SR_B7']).rename('NBR_Before');
+}).mean();
+
+var nbrAfter = postFireImagery.map(function(image) {
+  return image.normalizedDifference(['SR_B5', 'SR_B7']).rename('NBR_After');
+}).mean();
+
+Map.addLayer(nbrBefore.clip(roiPolygon), {}, 'NBR Before', false);
+Map.addLayer(nbrAfter.clip(roiPolygon), {}, 'NBR After', false);
+
+var nbrChange = nbrBefore.subtract(nbrAfter);
+Map.addLayer(nbrChange.clip(roiPolygon), {}, 'NBR Change', false);
+
+// 13. Calculate burned area extent
+var burnedThreshold = nbrChange.lt(0.1);
+var burnedArea = burnedThreshold.multiply(ee.Image.pixelArea().divide(1e6));
+var totalBurnedArea = ee.Number(burnedArea.reduceRegion({
+  reducer: ee.Reducer.sum(),
+  geometry: roiPolygon,
+  scale: 1000
+}).values().get(0));
+
+print('Total Burned Area (sq.km):', totalBurnedArea);
+
+
+Export.image.toDrive({
+  image: viirsData,
+  description: 'VIIRS_Fire_Detection_Export',
+  folder: 'EarthEngineExports', // Folder in Google Drive
+  fileNamePrefix: 'VIIRS_Fire_Detection',
+  region: roiPolygon, // Export region
+  scale: 500, // Resolution in meters
+  maxPixels: 1e13 // Maximum allowed pixels
+});
