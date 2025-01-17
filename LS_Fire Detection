@@ -30,15 +30,16 @@ Map.addLayer(roiPolygon, {}, 'Study Area')
 var viirsData = ee.ImageCollection("NASA/VIIRS/002/VNP09GA")
   .select(['I1', 'I2'])
   .filterDate('2025-01-07', '2025-01-14');
-  Map.addLayer(viirsData.toBands().clip(roiPolygon), {}, 'VIIRS Wildfire Detection', false);
+
+// Add VIIRS data to the map
+Map.addLayer(viirsData.toBands().clip(roiPolygon), {}, 'VIIRS Wildfire Detection', false);
 
 // 5. Load pre-wildfire imagery from Landsat 9
 var preFireImagery = ee.ImageCollection("LANDSAT/LC09/C02/T1_L2")
   .select(['SR_.*'])
   .filterDate('2024-01-01', '2024-12-31')
   .filterBounds(roiPolygon);
-  
-  Map.addLayer(preFireImagery.mean().clip(roiPolygon), {bands: ['SR_B5', 'SR_B4', 'SR_B3']}, 'Pre-Fire RGB', false);
+Map.addLayer(preFireImagery.mean().clip(roiPolygon), {bands: ['SR_B5', 'SR_B4', 'SR_B3']}, 'Pre-Fire RGB', false);
 
 // 6. Load post-wildfire imagery from Landsat 9
 var postFireImagery = ee.ImageCollection("LANDSAT/LC09/C02/T1_L2")
@@ -66,20 +67,63 @@ Map.addLayer(ndviAfter.clip(roiPolygon), {}, 'NDVI After', false);
 var ndviDifference = ndviBefore.subtract(ndviAfter);
 Map.addLayer(ndviDifference.clip(roiPolygon), {}, 'NDVI Change', false);
 
+// Export NDVI before wildfire
+Export.image.toDrive({
+  image: ndviBefore.clip(roiPolygon),
+  description: 'PreFire_NDVI',
+  scale: 100,
+  maxPixels: 1e13,
+  region: roiPolygon,
+  crs: 'EPSG:4326'
+});
 
+// Export NDVI after wildfire
+Export.image.toDrive({
+  image: ndviAfter.clip(roiPolygon),
+  description: 'PostFire_NDVI',
+  scale: 100,
+  maxPixels: 1e13,
+  region: roiPolygon,
+  crs: 'EPSG:4326'
+});
+
+// Export NDVI change
+Export.image.toDrive({
+  image: ndviDifference.clip(roiPolygon),
+  description: 'Wildfire_NDVI_Change',
+  scale: 100,
+  maxPixels: 1e13,
+  region: roiPolygon,
+  crs: 'EPSG:4326'
+});
 
 // 10. Mask out water bodies to avoid misinterpretation
 var waterMask = ee.ImageCollection("GOOGLE/DYNAMICWORLD/V1")
   .select('label').mode().neq(0);
 
+// Apply water mask to the NDVI difference
 var ndviChangeMasked = ndviDifference.updateMask(waterMask).rename('NDVI_Change_Masked');
 Map.addLayer(ndviChangeMasked.clip(roiPolygon), {}, 'NDVI Change (Masked)', false);
 
-// 11. Export the masked NDVI change image
+// Export the masked NDVI change image
 Export.image.toDrive({
   image: ndviChangeMasked.clip(roiPolygon),
-  description: 'Wildfire_NDVI_Change',
+  description: 'Wildfire_NDVI_Change_Masked',
   scale: 100,
+  maxPixels: 1e13,
+  region: roiPolygon,
+  crs: 'EPSG:4326'
+});
+
+// 11. Export VIIRS Wildfire Detection data
+// Select a single image (e.g., first image) from the VIIRS collection
+var viirsFirstImage = viirsData.first();
+
+// Export the first image of the VIIRS Wildfire Detection
+Export.image.toDrive({
+  image: viirsFirstImage.clip(roiPolygon),
+  description: 'VIIRS_Wildfire_Detection_First',
+  scale: 500,
   maxPixels: 1e13,
   region: roiPolygon,
   crs: 'EPSG:4326'
@@ -112,12 +156,8 @@ var totalBurnedArea = ee.Number(burnedArea.reduceRegion({
 print('Total Burned Area (sq.km):', totalBurnedArea);
 
 
-Export.image.toDrive({
-  image: viirsData,
-  description: 'VIIRS_Fire_Detection_Export',
-  folder: 'EarthEngineExports', // Folder in Google Drive
-  fileNamePrefix: 'VIIRS_Fire_Detection',
-  region: roiPolygon, // Export region
-  scale: 500, // Resolution in meters
-  maxPixels: 1e13 // Maximum allowed pixels
-});
+
+
+
+
+ 
